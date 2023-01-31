@@ -1,0 +1,176 @@
+project_name: "cloudreactor-ecs-quickstart"
+project_version_text: 1.0.0
+# Optionally, provide a steadily increasing whole number to indicate which
+# build is more updated than another.
+# project_version_number: 1
+project_url: "https://github.com/CloudReactor/cloudreactor-ecs-quickstart"
+
+# These settings will apply by default to all tasks and in all deployments.
+# They override the settings in your Run Environment.
+# To manage a setting in the CloudReactor UI, omit the property name and value.
+# To clear a property name and value, using the default value in the Run Environment,
+# set the property value to null.
+default_task_config: &default_task_config
+  #enabled: true
+  #max_concurrency: 1 # null for no concurrency limit
+  #max_age_seconds: 7200
+  #max_manual_start_delay_seconds: 60
+  #max_heartbeat_lateness_seconds: 120
+  ecs: &default_task_ecs
+    # See https://aws.amazon.com/fargate/pricing/
+    # for supported combinations.
+    cpu_units: 256
+    memory_mb: 512
+    # task:
+    #   network:
+    #     subnets:
+    #       - subnet_1
+    #       - subnet_2
+    #     security_groups:
+    #       - sg_1
+    #       - sg_2
+    #     assign_public_ip: True
+
+    # Uncomment to add properties to the main container:
+    # extra_main_container_properties
+    #   secrets:
+    #     - name: environment_variable_name
+    #       valueFrom: arn:aws:secretsmanager:[aws_region]:[aws_account_id]:secret:[secret_name]
+
+    # Uncomment to add properties to the top-level ECS task definition:
+    # extra_task_definition_properties:
+    #   volumes:
+    #     - name: "database_scratch"
+    #       host: {}
+
+    # To add extra containers to the task:
+    # Extra CPU/memory allocated to the extra containers,
+    # will be taken away from the total cpu_units and memory_mb
+    # allocated for the entire task.
+    #extra_container_cpu_units: 32
+    #extra_container_memory_mb: 128
+    # Each definition has the properties for containers in an AWS ECS task
+    # definition,
+    # The following example uses nginx as a reverse proxy. It assumed that a Docker image
+    # based on nginx, with configuration, is available in ECR already.
+    # See https://medium.com/@stefanofrancavilla/deploy-web-apps-nginx-to-ecs-with-docker-580c6af827e8
+    # except ECS cluster configuration is not needed since we're using Fargate.
+    # additional_container_definitions:
+    #  - name: Some Container Name
+    #    image: XXXXXXXXXX.dkr.ecr.us-west-2.amazonaws.com/configured-nginx
+    #    cpu: 256
+    #    memory: 1024
+    #    essential: "true"
+    #    portMappings:
+    #      - containerPort: 80 # nginx default port is 80
+    #      - hostPort: 8000    # port of the target group
+    #      - protocol: tcp
+
+  wrapper: &default_task_wrapper
+    max_retries: 1
+    heartbeat_interval_seconds: 120
+    enable_status_updates: True
+    status_update_interval_seconds: 60
+    # process_max_retries: 1
+    # process_timeout_seconds: 3600
+    # This data is sent back from the wrapper to CloudReactor when it starts.
+    # It may be used to identify properties about instance of the task that is
+    # running.
+    # other_instance_metadata:
+    #   a: 'b'
+    #   embedded:
+    #     c: 'd'
+    #     f: 1
+  env: &default_task_env
+    DEPLOYMENT: "{{env}}"
+  # alert_methods:
+  #   - Alert Method 1
+
+# These are per-task settings that will inherit and override the settings in
+# default_task_config, in all environments.
+# To add a task, add an additional property to task_name_to_config (e.g. task_1, file_io)
+# Each task must at a minimum define which command to run i.e. `command: python main.py`
+task_name_to_config:
+  # This task sends status back to CloudReactor as it is running
+  task_1:
+    <<: *default_task_config
+    description: "This description shows up in CloudReactor dashboard"
+    command: "python src/task_1.py"
+    schedule: cron(9 15 * * ? *)
+    wrapper:
+      <<: *default_task_wrapper
+      enable_status_updates: true
+  # This task shows how to use the temporary file system provided by ECS
+  file_io:
+    <<: *default_task_config
+    description: "File I/O"
+    command: "python src/file_io.py"
+    ecs:
+      <<: *default_task_ecs
+      extra_main_container_properties:
+        mountPoints:
+          - sourceVolume: "database_scratch"
+            containerPath: "/home/appuser/scratch"
+      extra_task_definition_properties:
+        volumes:
+          - name: "database_scratch"
+            host: {}
+    env:
+      <<: *default_task_env
+      TEMP_FILE_DIR: "/home/appuser/scratch"
+  postgres_to_snowflake:
+    <<: *default_task_config
+    description: "Extract data from postgres, upload to Snowflake"
+    command: "python src/postgres_to_snowflake.py"
+    # ecs:
+    #   <<: *default_task_ecs
+    #   extra_task_definition_properties:
+    #     This assumes one secrets object for postrges, and one for Snowflake.
+    #     For example, the postgres secrets object would look something this:
+    #     {"username": "myuser", "password": "secretpassword"...}
+    #     secrets:
+    #       - name: PG_DB_NAME
+    #         valueFrom: "arn:aws:ssm:<region>:<aws_account_id>:project/postgres:dbname"
+    #       - name: PG_DB_USER
+    #         valueFrom: "arn:aws:ssm:<region>:<aws_account_id>:project/postgres:username"
+    #       - name: PG_DB_PASSWORD
+    #         valueFrom: "arn:aws:ssm:<region>:<aws_account_id>:project/postgres:password"
+    #       - name: PG_DB_HOST
+    #         valueFrom: "arn:aws:ssm:<region>:<aws_account_id>:project/postgres:host"
+    #       - name: PG_DB_PORT
+    #         valueFrom: "arn:aws:ssm:<region>:<aws_account_id>:project/postgres:port"
+    #       - name: SNOWFLAKE_USER
+    #         valueFrom: "arn:aws:ssm:<region>:<aws_account_id>:project/snowflake:user"
+    #       - name: SNOWFLAKE_PASSWORD
+    #         valueFrom: "arn:aws:ssm:<region>:<aws_account_id>:project/snowflake:password"
+    #       - name: SNOWFLAKE_ACCOUNT
+    #         valueFrom: "arn:aws:ssm:<region>:<aws_account_id>:project/snowflake:account"
+
+# Uncomment to enable web server -- requires an IP target group and
+# load balancer setup in AWS
+#  web_server:
+#    <<: *default_task_config
+#    description: "Web Server"
+#    command: "flask run -p 7070 --host=0.0.0.0"
+#    max_concurrency: null
+#    is_service: True
+#    # Uncomment the following to control the instance count in code
+#    # rather than using whatever was last set in the dashboard.
+#    #service_instance_count: 1
+#    #min_service_instance_count: 1
+#    ecs:
+#      <<: *default_task_ecs
+#      task:
+#        network:
+#          security_groups:
+#            - sg-reachable-by-elb
+#      extra_main_container_properties:
+#        portMappings:
+#          - containerPort: 7070
+#            protocol: tcp
+#    env:
+#      <<: *default_task_env
+#      FLASK_APP: src/web_server.py
+#    wrapper:
+#      <<: *default_task_wrapper
+#      max_retries: 0

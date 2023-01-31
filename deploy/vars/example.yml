@@ -1,0 +1,131 @@
+# Copy this file to {environment}.yml where {environment} is the name of
+# your deployment environment (i.e. staging, production).
+# Then adjust the values according to your AWS settings.
+# Unless this file is encrypted with ansible-vault,
+# ensure the copied file is in .gitignore to avoid checking in secrets!
+
+# You can override your Run Environment's AWS settings here, but it shouldn't
+# be necessary unless you haven't specified security groups or subnets in
+# your Run Environment, or want to use custom settings for this project
+# (for security and/or isolation reasons).
+#project_aws:
+#  account_id: 123456789012
+#  region: "us-west-2"
+#  ecs:
+#    cluster_name: staging
+#    execution_role_arn: arn:aws:iam::12345678901:role/ecsTaskExecutionRole
+#    task:
+#      network:
+#        security_groups:
+#          - sg-1
+#          - sg-2
+#        subnets:
+#          - subnet-private-1
+#          - subnet-private-2
+#        # Set this to true if your subnets don't have access to a NAT gateway,
+#        # for example public subnets.
+         # If you are running on private subnets, this must be False.
+#        assign_public_ip: False
+#      role_arn: arn:aws:iam::12345678901:role/myrole
+
+cloudreactor:
+  base_url: https://api.cloudreactor.io
+  api_key: xxx
+  ## The name of the Run Environment in CloudReactor. The Run Environment stores
+  ## AWS settings that apply to all tasks in the deployment environment.
+  ## It defaults to the name of the deployment environment you pass in via
+  ## command-line or the DEPLOYMENT_ENVIRONMENT variable if you use Docker to
+  ## deploy.
+  #run_environment: Your Staging
+
+## Add task settings that apply to all tasks running in this deployment.
+## They will override the settings in common.yml.
+## In this example, it gets the API key for CloudReactor from
+## AWS Secrets Manager.
+default_env_task_config: &default_env_task_config
+#   service_instance_count: 2
+  ecs:
+    extra_main_container_properties:
+      # Note that when ECS injects secrets into the environment, it uses the
+      # permissions of the Task Execution role (ecs.execution_role_arn),
+      # NOT the permissions of the Task Role (ecs.task.role_arn).
+      # The CloudReactor permissions CloudFormation template gives access to the default
+      # Task Execution role of Run Environments to secrets with names starting with:
+      #
+      # CloudReactor/[deployment_environment]/common/
+      #
+      # (where deployment_environment was chosen when you installed the template /
+      # ran the AWS ECS Setup Wizard from CloudReactor).
+      #
+      # You can put secrets there to be shared with all Tasks in the Run Environment.
+      #
+      # Also note that ECS Fargate does not yet support JSON keys or version
+      # numbers in secret ARNs. If you have a secret value that is a JSON
+      # object, you need to parse the JSON value and extract the secrets you
+      # need in your task code.
+      secrets: &default_env_secrets
+        - name: PROC_WRAPPER_API_KEY
+          valueFrom: "arn:aws:secretsmanager:[aws_region]:[aws_account_id]:secret:CloudReactor/[runenv_name]/common/cloudreactor_api_key-xxx"
+        - name: POSTGRES_SECRETS
+          valueFrom: "arn:aws:secretsmanager:[aws_region]:[aws_account_id]:secret:CloudReactor/[runenv_name]/common/snowflake-xxx"
+        - name: SNOWFLAKE_SECRETS
+          valueFrom: "arn:aws:secretsmanager:[aws_region]:[aws_account_id]:secret:CloudReactor/[runenv_name]/common/snowflake-xxx"
+
+        # Optional Rollbar token used by the wrapper script
+        #- name: PROC_WRAPPER_ROLLBAR_ACCESS_TOKEN
+        #  valueFrom: "arn:aws:secretsmanager:[aws_region]:[aws_account_id]:secret:CloudReactor/example/common/rollbar_access_token-xxx"
+
+#     execution_role_arn:
+#     task:
+#       network:
+#         security_groups:
+#           - sg-1
+#           - sg-2
+#         subnets:
+#           - subnet-private-1
+#           - subnet-private-2
+#         assign_public_ip: true
+#       # ARN of ECS Task Role that can give the task access to your AWS resources,
+#       # for example, so that your task can read or write to files in S3.
+#       # See https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html
+#       # for instructions on how to create a ECS Task Role.
+#       role_arn: arn:aws:iam::12345678901:role/myrole
+
+## These properties go in the main container definition for the task
+## (containerDefinitions[0])
+#     extra_main_container_properties:
+#       volumes:
+#          - name: "more_storage"
+#            host: {}
+#
+#   alert_methods:
+#     - Some Alert Method
+
+# For any tasks that require overrides vs. common.yml, enter those overrides here.
+# For example, the schedule for task_1 in this deployment differs from the
+# schedule in common.yml.
+# Be sure that any tasks you add here inherit the properties in default_env_task_config,
+# so it will apply to each task.
+task_name_to_env_config:
+  postgres_to_snowflake:
+    <<: *default_env_task_config
+  task_1:
+    <<: *default_env_task_config
+    schedule: cron(9 0 * * ? *)
+# Uncomment to enable web server -- requires an IP target group and
+# load balancer setup in AWS
+#  web_server:
+#    <<: *default_env_task_config
+#    service_instance_count: 2
+#    ecs:
+#      task:
+#        network:
+#          subnets:
+#            - subnet-public-1
+#            - subnet-public-2
+#          assign_public_ip: true
+#        role_arn: arn:aws:iam::12345678901:role/myrole
+#      service:
+#        load_balancers:
+#          - target_group_arn: arn:aws:elasticloadbalancing:us-west-1:xxx:targetgroup/example-web/xxx
+#            container_port: 7070

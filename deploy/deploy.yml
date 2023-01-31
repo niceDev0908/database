@@ -1,0 +1,150 @@
+---
+# Ansible tasks to deploy cloudreactor-ecs-quickstart
+
+- name: "{{project_name}}"
+  hosts: 127.0.0.1
+  connection: local
+  vars_files:
+    - vars/common.yml
+    - vars/{{env}}.yml
+  vars:
+    env_task_name_to_config: "{{ task_name_to_env_config | default({}) }}"
+    resolved_task_name_to_config: "{{ task_name_to_config | combine(env_task_name_to_config, recursive=True) }}"
+    resolved_task_names: "{{ (resolved_task_name_to_config.keys() | list) if (task_names | upper) == 'ALL' else task_names.split(',') }}"
+    process_version_signature: "{{ lookup('env','CLOUDREACTOR_PROCESS_VERSION_SIGNATURE') | default(git_hash_cmd_result.stdout, true) }}"
+    docker_image_name: "{{project_name}}:{{env}}_{{process_version_signature}}"
+    run_environment_name: "{{ cloudreactor.run_environment | default(env) }}"
+    run_environment: "{{ run_environment_result.json.results[0] }}"
+    run_environment_exec_method: "{{ run_environment.execution_method_capabilities | selectattr('type', 'equalto', 'AWS ECS') | first }}"
+    aws: "{{ run_environment_aws | default({}) | combine(project_aws | default({}), recursive=True) }}"
+    aws_region: "{{ aws.region | default(lookup('env','AWS_DEFAULT_REGION')) }}"
+    ecr_hostname: "{{ aws.account_id }}.dkr.ecr.{{ aws_region }}.amazonaws.com"
+    task_definition_arn: "{{ (register_task_result.stdout | from_json).taskDefinition.taskDefinitionArn }}"
+
+  tasks:
+  - name: Compute git hash
+    command: "git rev-parse HEAD"
+    register: git_hash_cmd_result
+    when: lookup('env', 'CLOUDREACTOR_PROCESS_VERSION_SIGNATURE') == ''
+    tags:
+      - version
+      - build
+      - upload
+      - create_tasks
+
+  - debug: msg="Process version signature is {{ process_version_signature }}"
+    tags:
+      - version
+      - build
+      - upload
+      - create_tasks
+
+  - name: Get configuration from CloudReactor Run Environment
+    uri:
+      url: "{{ cloudreactor.base_url }}/api/v1/run_environments/?name={{ run_environment_name | urlencode }}"
+      headers:
+        Accept: "application/json"
+        Authorization: "Token {{cloudreactor.api_key}}"
+      return_content: yes
+    register: run_environment_result
+    tags:
+      - upload
+      - create_tasks
+
+  - name: Ensure Runtime Environment is found
+    assert:
+      that:
+        - run_environment_result.json.count == 1
+      fail_msg: "Run Environment '{{ run_environment_name }}' not found in CloudReactor, please create it."
+    tags:
+      - upload
+      - create_tasks
+
+  - debug:
+      msg: "Runtime Environment is {{ run_environment }}, UUID = {{ run_environment.uuid }}"
+      verbosity: 1
+
+  - name: Set default AWS configuration from Run Environment
+    set_fact:
+      run_environment_aws:
+        account_id: "{{ run_environment.aws_account_id }}"
+        region: "{{ run_environment.aws_default_region }}"
+        ecs:
+          cluster_name: "{{ run_environment_exec_method.default_cluster_arn }}"
+          execution_role_arn: "{{ run_environment_exec_method.default_execution_role }}"
+          task:
+            network:
+              security_groups: "{{ run_environment_exec_method.default_security_groups }}"
+              subnets: "{{ run_environment_exec_method.default_subnets }}"
+              assign_public_ip: "{{ run_environment_exec_method.default_assign_public_ip }}"
+            role_arn: "{{ run_environment_exec_method.task_execution_role | default(run_environment_exec_method.default_execution_role) }}"
+    tags:
+      - upload
+      - create_tasks
+
+  - debug:
+      msg: "Default AWS is {{ aws }}"
+      verbosity: 1
+
+  - name: Compute ECR login password
+    command: "aws ecr get-login-password --region {{aws.region}}"
+    register: ecr_login_password_cmd_result
+    tags:
+      - upload
+
+  - name: Login to ECR
+    command: "docker login --username AWS --password {{ecr_login_password_cmd_result.stdout}} {{ecr_hostname}}"
+    tags:
+      - upload
+
+  - name: Create output directory
+    file:
+      path: ../build/{{env}}
+      state: directory
+    tags:
+      - build
+
+  # If your code needs to be compiled, you can add steps here to compile it,
+  # for example:
+  # name: Package code using maven
+  # command: "mvn package"
+  # tags:
+  #  - build
+  #
+  # After it is compiled, your Dockerfile should COPY the binary (JAR file in
+  # the case of JDK projects).
+
+  - name: Copy runtime .env file read by python
+    copy: |
+      src=files/.env.{{env}}
+      dest=../build/{{env}}/.env
+    tags:
+      - build
+
+  - name: Build Docker image
+    command: "docker --debug build --build-arg ENV_FILE_PATH=build/{{env}}/.env -t {{docker_image_name}} ."
+    args:
+      chdir: ../
+    tags:
+      - build
+
+  - name: Create ECR repository
+    ecs_ecr:
+      name: "{{project_name}}"
+    tags:
+      - upload
+
+  - name: Tag Docker image
+    command: "docker tag {{docker_image_name}} {{ecr_hostname}}/{{docker_image_name}}"
+    tags:
+      - upload
+
+  - name: Push Docker image
+    command: "docker push {{ecr_hostname}}/{{docker_image_name}}"
+    tags:
+      - upload
+
+  - include_tasks: create_task.yml
+    with_items: "{{ resolved_task_names }}"
+    tags:
+      - create_tasks

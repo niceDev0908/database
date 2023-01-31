@@ -1,0 +1,80 @@
+version: "3.7"
+
+x-service-base: &service-base
+  image: cloudreactor-ecs-quickstart
+  build:
+    context: ./
+  volumes:
+    - ./src/:/home/appuser/src/
+    - ./deploy/files/proc_wrapper_1.3.0.py:/home/appuser/proc_wrapper.py
+    - ./deploy/files/.env.dev:/home/appuser/.env
+
+x-dev-base: &dev-base
+  <<: *service-base
+  image:  cloudreactor-ecs-quickstart-dev
+  build:
+    context: ./
+    dockerfile: Dockerfile-dev
+  volumes:
+    - ./src/:/home/appuser/src/
+    - ./tests/:/home/appuser/tests/
+    - ./deploy/files/.env.dev:/home/appuser/.env
+    - ./mypy.ini:/home/appuser/mypy.ini
+
+services:
+  task_1:
+    <<: *service-base
+    entrypoint: python src/task_1.py
+
+  file_io:
+    <<: *service-base
+    entrypoint: python src/file_io.py
+
+  web_server:
+    <<: *service-base
+    entrypoint: flask run -p 7070 --host=0.0.0.0
+    environment:
+      FLASK_APP: "src/web_server.py"
+    ports:
+      - "7070:7070"
+
+  postgres_to_snowflake:
+    <<: *service-base
+    command: python src/postgres_to_snowflake.py
+
+  # Not a deployed task, here for debugging your Docker build.
+  shell:
+    <<: *service-base
+    entrypoint: bash
+
+  pytest:
+    <<: *dev-base
+
+  pytest-cov:
+    <<: *dev-base
+    entrypoint: pytest --cov=src
+
+  pylint:
+    <<: *dev-base
+    entrypoint: pylint --rcfile=src/.pylintrc src
+
+  mypy:
+    <<: *dev-base
+    entrypoint: mypy src
+
+  safety:
+    <<: *dev-base
+    entrypoint: safety check
+
+  dev-shell:
+    <<: *dev-base
+    entrypoint: bash
+
+  # Check your Dockerfile against best-practices:
+  # See https://github.com/hadolint/hadolint
+  hadolint:
+    image: hadolint/hadolint
+    volumes:
+      - ./Dockerfile:/mnt/Dockerfile
+      - ./.hadolint.yaml:/mnt/.hadolint.yaml
+    entrypoint: /bin/hadolint --config /mnt/.hadolint.yaml /mnt/Dockerfile
